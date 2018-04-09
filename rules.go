@@ -6,11 +6,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/graphql-go/graphql/gqlerrors"
-	"github.com/graphql-go/graphql/language/ast"
-	"github.com/graphql-go/graphql/language/kinds"
-	"github.com/graphql-go/graphql/language/printer"
-	"github.com/graphql-go/graphql/language/visitor"
+	"github.com/cv21/graphql/gqlerrors"
+	"github.com/cv21/graphql/language/ast"
+	"github.com/cv21/graphql/language/kinds"
+	"github.com/cv21/graphql/language/printer"
+	"github.com/cv21/graphql/language/visitor"
 )
 
 // SpecifiedRules set includes all validation rules defined by the GraphQL spec.

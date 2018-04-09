@@ -7,8 +7,10 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/graphql-go/graphql/gqlerrors"
-	"github.com/graphql-go/graphql/language/ast"
+	"sync"
+
+	"github.com/cv21/graphql/gqlerrors"
+	"github.com/cv21/graphql/language/ast"
 )
 
 type ExecuteParams struct {
@@ -61,7 +63,7 @@ func Execute(p ExecuteParams) (result *Result) {
 				if r, ok := r.(error); ok {
 					err = gqlerrors.FormatError(r)
 				}
-				exeContext.Errors = append(exeContext.Errors, gqlerrors.FormatError(err))
+				exeContext.addError(gqlerrors.FormatError(err))
 				result.Errors = exeContext.Errors
 				select {
 				case out <- result:
@@ -111,6 +113,14 @@ type executionContext struct {
 	VariableValues map[string]interface{}
 	Errors         []gqlerrors.FormattedError
 	Context        context.Context
+	mu             *sync.Mutex
+}
+
+// Safely add error to execution context.
+func (e *executionContext) addError(err gqlerrors.FormattedError) {
+	e.mu.Lock()
+	e.Errors = append(e.Errors, err)
+	e.mu.Unlock()
 }
 
 func buildExecutionContext(p buildExecutionCtxParams) (*executionContext, error) {
@@ -157,6 +167,7 @@ func buildExecutionContext(p buildExecutionCtxParams) (*executionContext, error)
 	eCtx.VariableValues = variableValues
 	eCtx.Errors = p.Errors
 	eCtx.Context = p.Context
+	eCtx.mu = &sync.Mutex{}
 	return eCtx, nil
 }
 
@@ -280,13 +291,25 @@ func executeFields(p executeFieldsParams) *Result {
 	}
 
 	finalResults := map[string]interface{}{}
+
+	finalResultsMu := &sync.Mutex{}
+	wg := &sync.WaitGroup{}
+	wg.Add(len(p.Fields))
 	for responseName, fieldASTs := range p.Fields {
-		resolved, state := resolveField(p.ExecutionContext, p.ParentType, p.Source, fieldASTs)
-		if state.hasNoFieldDefs {
-			continue
-		}
-		finalResults[responseName] = resolved
+		go func(responseName string, fieldASTs []*ast.Field) {
+			defer wg.Done()
+			resolved, state := resolveField(p.ExecutionContext, p.ParentType, p.Source, fieldASTs)
+			if state.hasNoFieldDefs {
+				return
+			}
+
+			finalResultsMu.Lock()
+			finalResults[responseName] = resolved
+			finalResultsMu.Unlock()
+		}(responseName, fieldASTs)
 	}
+
+	wg.Wait()
 
 	return &Result{
 		Data:   finalResults,
@@ -528,7 +551,7 @@ func resolveField(eCtx *executionContext, parentType *Object, source interface{}
 			if _, ok := returnType.(*NonNull); ok {
 				panic(gqlerrors.FormatError(err))
 			}
-			eCtx.Errors = append(eCtx.Errors, gqlerrors.FormatError(err))
+			eCtx.addError(gqlerrors.FormatError(err))
 			return result, resultState
 		}
 		return result, resultState
@@ -594,7 +617,7 @@ func completeValueCatchingError(eCtx *executionContext, returnType Type, fieldAS
 				panic(r)
 			}
 			if err, ok := r.(gqlerrors.FormattedError); ok {
-				eCtx.Errors = append(eCtx.Errors, err)
+				eCtx.addError(err)
 			}
 			return completed
 		}
@@ -792,11 +815,33 @@ func completeListValue(eCtx *executionContext, returnType *List, fieldASTs []*as
 
 	itemType := returnType.OfType
 	completedResults := []interface{}{}
-	for i := 0; i < resultVal.Len(); i++ {
-		val := resultVal.Index(i).Interface()
-		completedItem := completeValueCatchingError(eCtx, itemType, fieldASTs, info, val)
-		completedResults = append(completedResults, completedItem)
+	wg := &sync.WaitGroup{}
+	wg.Add(resultVal.Len())
+
+	resultsCond := struct {
+		Position int
+		Cond     *sync.Cond
+	}{
+		Position: resultVal.Len(),
+		Cond:     &sync.Cond{},
 	}
+
+	for i := 0; i < resultVal.Len(); i++ {
+		go func(val interface{}, position int) {
+			defer wg.Done()
+
+			completedItem := completeValueCatchingError(eCtx, itemType, fieldASTs, info, val)
+			resultsCond.Cond.L.Lock()
+			for resultsCond.Position != i {
+				resultsCond.Cond.Wait()
+			}
+			completedResults = append(completedResults, completedItem)
+			resultsCond.Cond.L.Unlock()
+		}(resultVal.Index(i).Interface(), i)
+	}
+
+	wg.Wait()
+
 	return completedResults
 }
 

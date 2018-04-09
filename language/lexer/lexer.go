@@ -7,8 +7,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/graphql-go/graphql/gqlerrors"
-	"github.com/graphql-go/graphql/language/source"
+	"github.com/cv21/graphql/gqlerrors"
+	"github.com/cv21/graphql/language/source"
 )
 
 const (

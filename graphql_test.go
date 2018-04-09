@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/graphql-go/graphql"
-	"github.com/graphql-go/graphql/testutil"
+	"github.com/cv21/graphql"
+	"github.com/cv21/graphql/testutil"
 )
 
 type T struct {
