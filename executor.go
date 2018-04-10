@@ -302,6 +302,17 @@ func executeFields(p executeFieldsParams) *Result {
 	for responseName, fieldASTs := range p.Fields {
 		go func(responseName string, fieldASTs []*ast.Field) {
 			defer wg.Done()
+
+			defer func() {
+				if r := recover(); r != nil {
+					var err error
+					if r, ok := r.(error); ok {
+						err = gqlerrors.FormatError(r)
+					}
+					p.ExecutionContext.addError(gqlerrors.FormatError(err))
+				}
+			}()
+
 			resolved, state := resolveField(p.ExecutionContext, p.ParentType, p.Source, fieldASTs)
 			if state.hasNoFieldDefs {
 				return
