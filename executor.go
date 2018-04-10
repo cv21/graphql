@@ -292,9 +292,13 @@ func executeFields(p executeFieldsParams) *Result {
 
 	finalResults := map[string]interface{}{}
 
-	finalResultsMu := &sync.Mutex{}
+	m := &sync.Mutex{}
 	wg := &sync.WaitGroup{}
 	wg.Add(len(p.Fields))
+
+	// Concurrently resolve fields and fill finalResults.
+	// Use m sync.Mutex for sync goroutines when they writes results to finalResults.
+	// Use wg sync.WaitGroup for waiting while all fields will be resolved.
 	for responseName, fieldASTs := range p.Fields {
 		go func(responseName string, fieldASTs []*ast.Field) {
 			defer wg.Done()
@@ -303,9 +307,9 @@ func executeFields(p executeFieldsParams) *Result {
 				return
 			}
 
-			finalResultsMu.Lock()
+			m.Lock()
 			finalResults[responseName] = resolved
-			finalResultsMu.Unlock()
+			m.Unlock()
 		}(responseName, fieldASTs)
 	}
 
@@ -822,21 +826,32 @@ func completeListValue(eCtx *executionContext, returnType *List, fieldASTs []*as
 		Position int
 		Cond     *sync.Cond
 	}{
-		Position: resultVal.Len(),
-		Cond:     &sync.Cond{},
+		Position: 0,
+		Cond:     sync.NewCond(&sync.Mutex{}),
 	}
 
+	// Concurrently complete list values.
+	// Use resultsCond.Cond sync.Cond for appending results in corresponding order with list values.
 	for i := 0; i < resultVal.Len(); i++ {
 		go func(val interface{}, position int) {
 			defer wg.Done()
 
 			completedItem := completeValueCatchingError(eCtx, itemType, fieldASTs, info, val)
 			resultsCond.Cond.L.Lock()
-			for resultsCond.Position != i {
+			for resultsCond.Position != position {
+
+				// Wait for next change of Position property.
 				resultsCond.Cond.Wait()
 			}
 			completedResults = append(completedResults, completedItem)
+
+			// Increment Position after item completion.
+			resultsCond.Position += 1
+
 			resultsCond.Cond.L.Unlock()
+
+			// Notify cond waiters for condition changing.
+			resultsCond.Cond.Broadcast()
 		}(resultVal.Index(i).Interface(), i)
 	}
 
