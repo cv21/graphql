@@ -116,11 +116,18 @@ type executionContext struct {
 	mu             *sync.Mutex
 }
 
+// Synchronize any operation over executionContext.
+func (e *executionContext) withLock(fn func(c *executionContext)) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	fn(e)
+}
+
 // Safely add error to execution context.
 func (e *executionContext) addError(err gqlerrors.FormattedError) {
-	e.mu.Lock()
-	e.Errors = append(e.Errors, err)
-	e.mu.Unlock()
+	e.withLock(func(c *executionContext) {
+		c.Errors = append(c.Errors, err)
+	})
 }
 
 func buildExecutionContext(p buildExecutionCtxParams) (*executionContext, error) {
