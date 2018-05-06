@@ -326,8 +326,8 @@ func executeFields(p executeFieldsParams) *Result {
 			}
 
 			m.Lock()
+			defer m.Unlock()
 			finalResults[responseName] = resolved
-			m.Unlock()
 		}(responseName, fieldASTs)
 	}
 
