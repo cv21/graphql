@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 )
 
 const TAG = "json"
@@ -177,4 +178,31 @@ func inArray(slice interface{}, item interface{}) bool {
 		}
 	}
 	return false
+}
+
+// WaitGroupWrapper make tiny middleware allowing.
+// Must runs only when wait group filled.
+type waitGroupWrapper struct {
+	*sync.WaitGroup
+	waitChannel chan bool
+	once        *sync.Once
+}
+
+func (w *waitGroupWrapper) Wait() chan bool {
+	go func() {
+		defer w.once.Do(func() {
+			close(w.waitChannel)
+		})
+		w.WaitGroup.Wait()
+	}()
+
+	return w.waitChannel
+}
+
+func NewWaitGroupWrapper(wg *sync.WaitGroup) *waitGroupWrapper {
+	return &waitGroupWrapper{
+		WaitGroup:   wg,
+		waitChannel: make(chan bool),
+		once:        &sync.Once{},
+	}
 }

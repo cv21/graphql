@@ -300,23 +300,21 @@ func executeFields(p executeFieldsParams) *Result {
 	finalResults := map[string]interface{}{}
 
 	m := &sync.Mutex{}
-	wg := &sync.WaitGroup{}
-	wg.Add(len(p.Fields))
+	wgWrapper := NewWaitGroupWrapper(&sync.WaitGroup{})
+	wgWrapper.Add(len(p.Fields))
+	panicChan := make(chan interface{})
+	defer close(panicChan)
 
 	// Concurrently resolve fields and fill finalResults.
 	// Use m sync.Mutex for sync goroutines when they writes results to finalResults.
-	// Use wg sync.WaitGroup for waiting while all fields will be resolved.
+	// Use wgWrapper WaitGroupWrapper for waiting while all fields will be resolved.
 	for responseName, fieldASTs := range p.Fields {
 		go func(responseName string, fieldASTs []*ast.Field) {
-			defer wg.Done()
+			defer wgWrapper.Done()
 
 			defer func() {
 				if r := recover(); r != nil {
-					var err error
-					if r, ok := r.(error); ok {
-						err = gqlerrors.FormatError(r)
-					}
-					p.ExecutionContext.addError(gqlerrors.FormatError(err))
+					panicChan <- r
 				}
 			}()
 
@@ -331,7 +329,11 @@ func executeFields(p executeFieldsParams) *Result {
 		}(responseName, fieldASTs)
 	}
 
-	wg.Wait()
+	select {
+	case <-wgWrapper.Wait():
+	case err := <-panicChan:
+		panic(err)
+	}
 
 	return &Result{
 		Data:   finalResults,
@@ -353,7 +355,6 @@ type collectFieldsParams struct {
 // returns and Interface or Union type, the "runtime type" will be the actual
 // Object type returned by that field.
 func collectFields(p collectFieldsParams) map[string][]*ast.Field {
-
 	fields := p.Fields
 	if fields == nil {
 		fields = map[string][]*ast.Field{}
@@ -837,8 +838,11 @@ func completeListValue(eCtx *executionContext, returnType *List, fieldASTs []*as
 
 	itemType := returnType.OfType
 	completedResults := []interface{}{}
-	wg := &sync.WaitGroup{}
-	wg.Add(resultVal.Len())
+	wgWrapper := NewWaitGroupWrapper(&sync.WaitGroup{})
+	wgWrapper.Add(resultVal.Len())
+
+	panicChan := make(chan interface{})
+	defer close(panicChan)
 
 	resultsCond := struct {
 		Position int
@@ -852,12 +856,16 @@ func completeListValue(eCtx *executionContext, returnType *List, fieldASTs []*as
 	// Use resultsCond.Cond sync.Cond for appending results in corresponding order with list values.
 	for i := 0; i < resultVal.Len(); i++ {
 		go func(val interface{}, position int) {
-			defer wg.Done()
+			defer wgWrapper.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					panicChan <- r
+				}
+			}()
 
 			completedItem := completeValueCatchingError(eCtx, itemType, fieldASTs, info, val)
 			resultsCond.Cond.L.Lock()
 			for resultsCond.Position != position {
-
 				// Wait for next change of Position property.
 				resultsCond.Cond.Wait()
 			}
@@ -873,7 +881,11 @@ func completeListValue(eCtx *executionContext, returnType *List, fieldASTs []*as
 		}(resultVal.Index(i).Interface(), i)
 	}
 
-	wg.Wait()
+	select {
+	case <-wgWrapper.Wait():
+	case err := <-panicChan:
+		panic(err)
+	}
 
 	return completedResults
 }
